@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { Routes, Route, useNavigate, useParams, useSearchParams, useLocation } from 'react-router-dom';
 import { RCAItem } from './types';
 import TimeRangeSelector from './components/TimeRangeSelector';
@@ -21,6 +21,8 @@ import WebhookSettings from './components/WebhookSettings';
 import WebhookList from './components/WebhookList';
 import FloatingChatPanel from './components/FloatingChatPanel';
 import { useSearch } from './context/SearchContext';
+import { usePolling } from './hooks/usePolling';
+import { useSSE, SSEEvent } from './hooks/useSSE';
 // [필수] 우리가 만든 로직 Import
 import { searchIncidents, searchAlerts } from './utils/searchLogic';
 
@@ -88,7 +90,18 @@ function App() {
   const [authReady, setAuthReady] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [allowSignup, setAllowSignup] = useState(false);
+  const [oidcEnabled, setOidcEnabled] = useState(false);
+  const [oidcLoginUrl, setOidcLoginUrl] = useState('');
+  const [oidcProvider, setOidcProvider] = useState('');
   const [isChatDocked, setIsChatDocked] = useState(false);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout>>();
+
+  // Cleanup debounce timer on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    };
+  }, []);
 
   const mapLegacyTimeToKey = (range: string): string => {
     switch (range) {
@@ -102,14 +115,15 @@ function App() {
     }
   };
 
-  // URL Sync (기존 쿼리 파라미터 유지용)
+  // URL Sync (기존 쿼리 파라미터 유지용, 인증 후에만 실행)
   useEffect(() => {
+    if (!isAuthenticated) return;
     const params: Record<string, string> = {};
     if (statusFilter !== 'all') params.status = statusFilter;
     if (severityFilter !== 'all') params.severity = severityFilter;
     if (timeRange !== 'All Time') params.time = timeRange;
     setSearchParams(params, { replace: true });
-  }, [statusFilter, severityFilter, timeRange, setSearchParams]);
+  }, [isAuthenticated, statusFilter, severityFilter, timeRange, setSearchParams]);
 
   const getCurrentTimeStr = () => {
     const now = new Date();
@@ -130,6 +144,9 @@ function App() {
         const refreshed = await refreshAccessToken();
         if (!active) return;
         setAllowSignup(config.allowSignup);
+        setOidcEnabled(config.oidcEnabled || false);
+        setOidcLoginUrl(config.oidcLoginUrl || '');
+        setOidcProvider(config.oidcProvider || '');
         setIsAuthenticated(refreshed);
       } catch (err) {
         console.error('Auth init failed:', err);
@@ -154,7 +171,51 @@ function App() {
     }
   }, [location]);  
 
-  // Fetch Data
+  // Data loading function (background=true skips loading indicators)
+  const loadData = useCallback(async (isBackground = false) => {
+    try {
+      if (!isBackground) setLoading(true);
+      setError(null);
+      const rawData: RawRCAItem[] = await fetchRCAs();
+      const mappedRCAs = rawData.map((item) => {
+        const serverTime = item.created_at || item.timestamp || item.time || item.start_time || item.fired_at;
+        return { ...item, time: serverTime ? String(serverTime) : getCurrentTimeStr() };
+      });
+      setAllRCAs(mappedRCAs);
+    } catch {
+      if (!isBackground) setError('데이터를 불러오는데 실패했습니다.');
+    } finally {
+      if (!isBackground) setLoading(false);
+    }
+
+    try {
+      if (!isBackground) setAlertLoading(true);
+      setAlertError(null);
+      const data = await fetchAlerts();
+      setAllAlerts(data);
+    } catch {
+      if (!isBackground) setAlertError('Alert 데이터를 불러오는데 실패했습니다.');
+    } finally {
+      if (!isBackground) setAlertLoading(false);
+    }
+
+    try {
+      if (!isBackground) setMuteLoading(true);
+      setMuteError(null);
+      const rawMuted: RawRCAItem[] = await fetchMutedIncidents();
+      const mappedMuted = rawMuted.map((item) => {
+        const serverTime = item.created_at || item.timestamp || item.time || item.start_time || item.fired_at;
+        return { ...item, time: serverTime ? String(serverTime) : getCurrentTimeStr() };
+      });
+      setMutedIncidents(mappedMuted);
+    } catch {
+      if (!isBackground) setMuteError('Mute 데이터를 불러오는데 실패했습니다.');
+    } finally {
+      if (!isBackground) setMuteLoading(false);
+    }
+  }, []);
+
+  // Initial data load
   useEffect(() => {
     if (!isAuthenticated) {
       setAllRCAs([]);
@@ -162,54 +223,32 @@ function App() {
       setMutedIncidents([]);
       return;
     }
-
-    const loadData = async (isBackground = false) => {
-      try {
-        if (!isBackground) setLoading(true);
-        setError(null);
-        const rawData: RawRCAItem[] = await fetchRCAs();
-        const mappedRCAs = rawData.map((item) => {
-          const serverTime = item.created_at || item.timestamp || item.time || item.start_time || item.fired_at;
-          return { ...item, time: serverTime ? String(serverTime) : getCurrentTimeStr() };
-        });
-        setAllRCAs(mappedRCAs);
-      } catch (err) {
-        if (!isBackground) setError('데이터를 불러오는데 실패했습니다.');
-      } finally {
-        if (!isBackground) setLoading(false);
-      }
-
-      try {
-        if (!isBackground) setAlertLoading(true);
-        setAlertError(null);
-        const data = await fetchAlerts();
-        setAllAlerts(data);
-      } catch (err) {
-        if (!isBackground) setAlertError('Alert 데이터를 불러오는데 실패했습니다.');
-      } finally {
-        if (!isBackground) setAlertLoading(false);
-      }
-
-      try {
-        if (!isBackground) setMuteLoading(true);
-        setMuteError(null);
-        const rawMuted: RawRCAItem[] = await fetchMutedIncidents();
-        const mappedMuted = rawMuted.map((item) => {
-          const serverTime = item.created_at || item.timestamp || item.time || item.start_time || item.fired_at;
-          return { ...item, time: serverTime ? String(serverTime) : getCurrentTimeStr() };
-        });
-        setMutedIncidents(mappedMuted);
-      } catch (err) {
-        if (!isBackground) setMuteError('Mute 데이터를 불러오는데 실패했습니다.');
-      } finally {
-        if (!isBackground) setMuteLoading(false);
-      }
-    };
-
     loadData(false);
-    const intervalId = setInterval(() => { loadData(true); }, 1000);
-    return () => clearInterval(intervalId);
-  }, [isAuthenticated]);
+  }, [isAuthenticated, loadData]);
+
+  // SSE: real-time event notifications from backend
+  const handleSSEEvent = useCallback((event: SSEEvent) => {
+    if (event.type === 'heartbeat') return;
+    // Debounce: collapse multiple rapid events into a single refresh
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    debounceTimerRef.current = setTimeout(() => { loadData(true); }, 500);
+  }, [loadData]);
+
+  const { connectionState } = useSSE({
+    onEvent: handleSSEEvent,
+    enabled: isAuthenticated,
+  });
+
+  // Polling: 30s fallback when SSE is not connected
+  usePolling({
+    callback: () => loadData(true),
+    interval: 30_000,
+    pauseOnHidden: true,
+    backoffMultiplier: 2,
+    maxInterval: 120_000,
+    enabled: isAuthenticated,
+    sseConnected: connectionState === 'connected',
+  });
 
   const handleLogout = async () => {
     await logout();
@@ -280,7 +319,7 @@ function App() {
         let target = item.labels;
         if (!target) return;
         if (typeof target === 'string') {
-           try { target = JSON.parse((target as string).replace(/'/g, '"')); } catch(e) { return; }
+           try { target = JSON.parse((target as string).replace(/'/g, '"')); } catch { return; }
         }
         if (typeof target === 'object') {
           Object.entries(target).forEach(([k, v]) => labelsSet.add(`${k}:${v}`));
@@ -300,26 +339,30 @@ function App() {
 
 
   if (!authReady) {
-    return <div className="min-h-screen flex items-center justify-center bg-gray-100 dark:bg-gray-900 text-gray-600 dark:text-gray-400">인증 정보를 확인하는 중입니다...</div>;
+    return <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950 text-slate-500 dark:text-slate-400">인증 정보를 확인하는 중입니다...</div>;
   }
   if (!isAuthenticated) {
-    return <AuthPanel allowSignup={allowSignup} onAuthenticated={() => setIsAuthenticated(true)} />;
+    return <AuthPanel allowSignup={allowSignup} oidcEnabled={oidcEnabled} oidcLoginUrl={oidcLoginUrl} oidcProvider={oidcProvider} onAuthenticated={() => setIsAuthenticated(true)} />;
   }
 
   // 스타일
-  const selectStyle = "px-4 py-2 text-sm font-medium border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500 hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors shadow-sm cursor-pointer text-left";
+  const selectStyle = "px-4 py-2 text-sm font-medium border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-cyan-500 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors shadow-sm cursor-pointer text-left";
+  const isSettingsRoute = location.pathname.startsWith('/settings');
 
   return (
-    <div className="min-h-screen bg-gray-100 dark:bg-gray-900 transition-colors duration-300">
-      <Header onLogout={handleLogout} />
-      <div className="pt-16">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 transition-colors duration-300">
+      <Header onLogout={handleLogout} connectionState={connectionState} />
+      <div className="pt-14">
         <Sidebar />
-        <div className={`md:ml-64 px-4 sm:px-6 lg:px-8 py-6 transition-all duration-300 ${isChatDocked ? "md:mr-[26rem]" : ""}`}>
+        <div className={`md:ml-60 px-4 sm:px-6 lg:px-8 py-6 transition-all duration-300 ${isChatDocked ? "md:mr-[26rem]" : ""}`}>
           <div className="w-full max-w-[1600px] mx-auto">
-            <div className="mb-6">
-              <UnifiedSearchPanel availableLabels={availableLabels} availableNamespaces={availableNamespaces} />
-            </div>
+            {!isSettingsRoute && (
+              <div className="mb-6">
+                <UnifiedSearchPanel availableLabels={availableLabels} availableNamespaces={availableNamespaces} />
+              </div>
+            )}
 
+            <div key={location.pathname} className="animate-fade-in">
             <Routes>
               <Route path="/incidents/:id" element={<IncidentDetailRoute />} />
               <Route path="/alerts/:id" element={<AlertDetailRoute />} />
@@ -327,9 +370,9 @@ function App() {
 
               {/* Incident Dashboard */}
               <Route path="/" element={
-                <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6 transition-colors duration-300">
+                <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm p-6 transition-colors duration-300">
                   <div className="mb-6 flex flex-col lg:flex-row justify-between items-center gap-4">
-                    <h1 className="text-2xl font-semibold text-gray-800 dark:text-white">Incident Dashboard</h1>
+                    <h1 className="text-xl font-semibold font-mono tracking-wide text-slate-900 dark:text-slate-100">Incident Dashboard</h1>
                     <div className="flex flex-col sm:flex-row items-center justify-end gap-3 w-full sm:w-auto">
                       <select
                         value={statusFilter}
@@ -367,10 +410,36 @@ function App() {
                     </div>
                   </div>
 
+                  {/* Stat Cards */}
+                  <div className="grid grid-cols-3 gap-4 mb-6">
+                    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-4 border-l-4 border-l-cyan-500">
+                      <div className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Total</div>
+                      <div className="text-2xl font-bold font-mono text-slate-900 dark:text-slate-100 mt-1">{filteredRCAs.length}</div>
+                    </div>
+                    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-4 border-l-4 border-l-rose-500">
+                      <div className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Firing</div>
+                      <div className="text-2xl font-bold font-mono text-rose-600 dark:text-rose-400 mt-1">{filteredRCAs.filter(r => !r.resolved_at).length}</div>
+                    </div>
+                    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-4 border-l-4 border-l-emerald-500">
+                      <div className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Resolved</div>
+                      <div className="text-2xl font-bold font-mono text-emerald-600 dark:text-emerald-400 mt-1">{filteredRCAs.filter(r => !!r.resolved_at).length}</div>
+                    </div>
+                  </div>
+
                   {loading ? (
-                    <div className="flex justify-center items-center py-12 text-gray-600 dark:text-gray-400">데이터를 불러오는 중...</div>
+                    <div className="space-y-4 py-4">
+                      {Array.from({ length: 5 }).map((_, i) => (
+                        <div key={i} className="flex items-center gap-4 px-4">
+                          <div className="skeleton h-4 w-16" />
+                          <div className="skeleton h-4 w-28" />
+                          <div className="skeleton h-4 flex-1" />
+                          <div className="skeleton h-5 w-16 rounded-full" />
+                          <div className="skeleton h-5 w-16 rounded-full" />
+                        </div>
+                      ))}
+                    </div>
                   ) : error ? (
-                    <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-md p-4 mb-4 text-red-600 dark:text-red-400">{error}</div>
+                    <div className="bg-rose-50 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-800 rounded-md p-4 mb-4 text-rose-600 dark:text-rose-400">{error}</div>
                   ) : (
                     <>
                       <RCATable rcas={paginatedRCAs} onTitleClick={handleTitleClick} />
@@ -380,7 +449,7 @@ function App() {
                         </div>
                       )}
                       {filteredRCAs.length === 0 && (
-                        <div className="flex justify-center items-center py-12 text-gray-500 dark:text-gray-400">
+                        <div className="flex justify-center items-center py-12 text-slate-500 dark:text-slate-400">
                           데이터가 없습니다.
                         </div>
                       )}
@@ -391,9 +460,9 @@ function App() {
 
               {/* Alert Dashboard */}
               <Route path="/alerts" element={
-                <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6 transition-colors duration-300">
+                <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm p-6 transition-colors duration-300">
                   <div className="mb-6 flex flex-col lg:flex-row justify-between items-center gap-4">
-                    <h1 className="text-2xl font-semibold text-gray-800 dark:text-white">Alert Dashboard</h1>
+                    <h1 className="text-xl font-semibold font-mono tracking-wide text-slate-900 dark:text-slate-100">Alert Dashboard</h1>
                     <div className="flex flex-col sm:flex-row items-center justify-end gap-3 w-full sm:w-auto">
                       <select
                         value={statusFilter}
@@ -431,10 +500,36 @@ function App() {
                     </div>
                   </div>
 
+                  {/* Stat Cards */}
+                  <div className="grid grid-cols-3 gap-4 mb-6">
+                    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-4 border-l-4 border-l-cyan-500">
+                      <div className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Total</div>
+                      <div className="text-2xl font-bold font-mono text-slate-900 dark:text-slate-100 mt-1">{filteredAlerts.length}</div>
+                    </div>
+                    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-4 border-l-4 border-l-rose-500">
+                      <div className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Firing</div>
+                      <div className="text-2xl font-bold font-mono text-rose-600 dark:text-rose-400 mt-1">{filteredAlerts.filter(a => a.status === 'firing').length}</div>
+                    </div>
+                    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-4 border-l-4 border-l-emerald-500">
+                      <div className="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Resolved</div>
+                      <div className="text-2xl font-bold font-mono text-emerald-600 dark:text-emerald-400 mt-1">{filteredAlerts.filter(a => a.status === 'resolved').length}</div>
+                    </div>
+                  </div>
+
                   {alertLoading ? (
-                    <div className="flex justify-center items-center py-12 text-gray-600 dark:text-gray-400">데이터를 불러오는 중...</div>
+                    <div className="space-y-4 py-4">
+                      {Array.from({ length: 5 }).map((_, i) => (
+                        <div key={i} className="flex items-center gap-4 px-4">
+                          <div className="skeleton h-4 w-16" />
+                          <div className="skeleton h-4 w-28" />
+                          <div className="skeleton h-4 flex-1" />
+                          <div className="skeleton h-5 w-16 rounded-full" />
+                          <div className="skeleton h-5 w-16 rounded-full" />
+                        </div>
+                      ))}
+                    </div>
                   ) : alertError ? (
-                    <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-md p-4 mb-4 text-red-600 dark:text-red-400">{alertError}</div>
+                    <div className="bg-rose-50 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-800 rounded-md p-4 mb-4 text-rose-600 dark:text-rose-400">{alertError}</div>
                   ) : (
                     <>
                       <AlertTable alerts={paginatedAlerts} onTitleClick={handleAlertTitleClick} />
@@ -444,7 +539,7 @@ function App() {
                         </div>
                       )}
                       {filteredAlerts.length === 0 && (
-                        <div className="flex justify-center items-center py-12 text-gray-500 dark:text-gray-400">표시할 Alert이 없습니다.</div>
+                        <div className="flex justify-center items-center py-12 text-slate-500 dark:text-slate-400">표시할 Alert이 없습니다.</div>
                       )}
                     </>
                   )}
@@ -453,9 +548,9 @@ function App() {
               
               {/* Muted Route */}
               <Route path="/muted" element={
-                <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6 transition-colors duration-300">
+                <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm p-6 transition-colors duration-300">
                   <div className="mb-6 flex flex-col lg:flex-row justify-between items-center gap-4">
-                    <h1 className="text-2xl font-semibold text-gray-800 dark:text-white">Archived Incidents</h1>
+                    <h1 className="text-xl font-semibold font-mono tracking-wide text-slate-900 dark:text-slate-100">Archived Incidents</h1>
                     <div className="flex flex-col sm:flex-row items-center justify-end gap-3 w-full sm:w-auto">
                       <select
                         value={statusFilter}
@@ -494,9 +589,19 @@ function App() {
                   </div>
                   
                   {muteLoading ? (
-                    <div className="flex justify-center items-center py-12 text-gray-600 dark:text-gray-400">데이터를 불러오는 중...</div>
+                    <div className="space-y-4 py-4">
+                      {Array.from({ length: 5 }).map((_, i) => (
+                        <div key={i} className="flex items-center gap-4 px-4">
+                          <div className="skeleton h-4 w-16" />
+                          <div className="skeleton h-4 w-28" />
+                          <div className="skeleton h-4 flex-1" />
+                          <div className="skeleton h-5 w-16 rounded-full" />
+                          <div className="skeleton h-5 w-16 rounded-full" />
+                        </div>
+                      ))}
+                    </div>
                   ) : muteError ? (
-                    <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-md p-4 mb-4 text-red-600 dark:text-red-400">{muteError}</div>
+                    <div className="bg-rose-50 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-800 rounded-md p-4 mb-4 text-rose-600 dark:text-rose-400">{muteError}</div>
                   ) : (
                     <>
                       <ArchivedTable rcas={paginatedMutedIncidents} onTitleClick={handleMuteTitleClick} />
@@ -516,6 +621,7 @@ function App() {
               <Route path="/settings/webhooks/new" element={<WebhookSettings />} />
               <Route path="/settings/webhooks/:id" element={<WebhookSettings />} />
             </Routes>
+            </div>
           </div>
         </div>
       </div>
