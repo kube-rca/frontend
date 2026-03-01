@@ -40,6 +40,7 @@ const WebhookSettings: React.FC = () => {
   const [webhookType, setWebhookType] = useState<WebhookType>('slack');
   const [token, setToken] = useState('');
   const [channel, setChannel] = useState('');
+  const [showToken, setShowToken] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
@@ -191,13 +192,33 @@ const WebhookSettings: React.FC = () => {
           <>
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Slack Bot Token</label>
-              <input
-                type="password"
-                value={token}
-                onChange={(e) => setToken(e.target.value)}
-                placeholder="xoxb-..."
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-blue-500 focus:border-blue-500"
-              />
+              <div className="relative">
+                <input
+                  type={showToken ? 'text' : 'password'}
+                  value={token}
+                  onChange={(e) => setToken(e.target.value)}
+                  placeholder="xoxb-..."
+                  className="w-full px-3 py-2 pr-10 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-blue-500 focus:border-blue-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowToken((v) => !v)}
+                  className="absolute inset-y-0 right-0 flex items-center px-3 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                  aria-label={showToken ? 'Hide token' : 'Show token'}
+                >
+                  {showToken ? (
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M13.875 18.825A10.05 10.05 0 0112 19c-5.523 0-9-4.477-9-7s3.477-7 9-7a10.05 10.05 0 011.875.175M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M3 3l18 18" />
+                    </svg>
+                  ) : (
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.477 0 8.268 2.943 9.542 7-1.274 4.057-5.065 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                    </svg>
+                  )}
+                </button>
+              </div>
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Slack Channel ID</label>
@@ -218,25 +239,36 @@ const WebhookSettings: React.FC = () => {
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
               Bearer Token (Optional)
             </label>
-            <input
-              type="password"
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-              placeholder="토큰이 필요한 경우만 입력"
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-blue-500 focus:border-blue-500"
-            />
+            <div className="relative">
+              <input
+                type={showToken ? 'text' : 'password'}
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                placeholder="토큰이 필요한 경우만 입력"
+                className="w-full px-3 py-2 pr-10 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-blue-500 focus:border-blue-500"
+              />
+              <button
+                type="button"
+                onClick={() => setShowToken((v) => !v)}
+                className="absolute inset-y-0 right-0 flex items-center px-3 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                aria-label={showToken ? 'Hide token' : 'Show token'}
+              >
+                {showToken ? (
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M13.875 18.825A10.05 10.05 0 0112 19c-5.523 0-9-4.477-9-7s3.477-7 9-7a10.05 10.05 0 011.875.175M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 3l18 18" />
+                  </svg>
+                ) : (
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.477 0 8.268 2.943 9.542 7-1.274 4.057-5.065 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                  </svg>
+                )}
+              </button>
+            </div>
           </div>
         )}
 
-        <div className="rounded-md border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 px-4 py-3">
-          <h2 className="text-sm font-semibold text-blue-800 dark:text-blue-300 mb-1">자동 적용 설정</h2>
-          <p className="text-sm text-blue-700 dark:text-blue-200">
-            {WEBHOOK_LABEL[webhookType]} 연동 정보만 frontend에서 전달하고, 알림 본문은 backend가 생성합니다.
-          </p>
-          <p className="text-xs text-blue-600 dark:text-blue-300 mt-1">
-            Slack 타입은 Bot Token + Channel ID를 저장해 `chat.postMessage` 기반으로 알림을 전송합니다.
-          </p>
-        </div>
 
         <div className="pt-2">
           {saveMessage && (
